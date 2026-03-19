@@ -3,24 +3,42 @@ import numpy as np
 import joblib
 import pandas as pd
 
-# import your shared preprocessing functions
 from preprocessing import pad_signal, extract_features_from_signal
 
-st.title("Parkinson’s Finger Tapping Classifier")
+# ─────────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Parkinson's Classifier", page_icon="🫀", layout="centered")
 
-# =========================
-# Load Models
-# =========================
+st.markdown("""
+    <style>
+        [data-testid="stMetricValue"] {
+            font-size: 1rem;
+            white-space: normal;
+            word-break: break-word;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-LEFT_MODEL_PATH = "models/left_svm.pkl"
-RIGHT_MODEL_PATH = "models/right_svm.pkl"
+st.title("🫀 Parkinson's Finger Tapping Classifier")
+st.caption("Predicts Parkinson's presence (Positive / Negative) from finger tapping signals")
 
-left_model = joblib.load(LEFT_MODEL_PATH)
-right_model = joblib.load(RIGHT_MODEL_PATH)
+# ─────────────────────────────────────────────────────────────
+# LOAD MODELS — cached so they don't reload on every interaction
+# ─────────────────────────────────────────────────────────────
+@st.cache_resource
+def load_models():
+    return {
+        "Left":  joblib.load("models/left_svm.pkl"),
+        "Right": joblib.load("models/right_svm.pkl"),
+    }
 
-# =========================
-# Sidebar Inputs
-# =========================
+models = load_models()
+
+# ─────────────────────────────────────────────────────────────
+# SIDEBAR — inputs
+# ─────────────────────────────────────────────────────────────
+st.sidebar.header("⚙️ Configuration")
 
 hand = st.sidebar.selectbox("Select Hand", ["Left", "Right"])
 
@@ -29,65 +47,62 @@ updrs_raw = st.sidebar.selectbox(
     options=[0, 1, 2, 3, 4]
 )
 
-st.sidebar.write("Upload or paste signals")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Signal Data**")
 
-amplitude_input = st.text_area(
-    "Amplitude values (comma separated)",
-    height=150
-)
+amplitude_input = st.sidebar.text_area("Amplitude values (comma separated)", height=120)
+time_input      = st.sidebar.text_area("Time values (comma separated)",      height=120)
 
-time_input = st.text_area(
-    "Time values (comma separated)",
-    height=150
-)
-
-# =========================
-# Helpers
-# =========================
-
+# ─────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────
 def parse_signal(text):
     return np.array([float(x.strip()) for x in text.split(",") if x.strip() != ""])
 
-# =========================
-# Prediction
-# =========================
+# ─────────────────────────────────────────────────────────────
+# MAIN — prediction on button click
+# ─────────────────────────────────────────────────────────────
+if st.button("🔍 Predict", use_container_width=True):
 
-if st.button("Predict"):
-
-    if amplitude_input == "" or time_input == "":
-        st.error("Please provide amplitude and time values.")
+    if not amplitude_input or not time_input:
+        st.error("Please provide both amplitude and time values.")
 
     else:
         amplitude = parse_signal(amplitude_input)
-        time = parse_signal(time_input)
+        time      = parse_signal(time_input)
 
         amplitude, time = pad_signal(amplitude, time)
-
-        features = extract_features_from_signal(amplitude, time)
+        features        = extract_features_from_signal(amplitude, time)
 
         if features is None:
-            st.error("Not enough valid taps detected.")
+            st.error("Not enough valid taps detected. Please check your signal.")
 
         else:
-            # encode UPDRS
-            updrs_encoded = 1 if updrs_raw >= 3 else 0
+            # Encode UPDRS as feature
+            updrs_encoded      = 1 if updrs_raw >= 3 else 0
+            features["updrs"]  = updrs_encoded
+            feature_vector     = pd.DataFrame([features])
 
-            features["updrs"] = updrs_encoded
-
-            feature_vector = pd.DataFrame([features])
-
-            model = left_model if hand == "Left" else right_model
-
-            prob = model.predict_proba(feature_vector)[0][1]
+            model = models[hand]
+            prob  = model.predict_proba(feature_vector)[0][1]
 
             if prob < 0.40:
-                prediction = "Negative (No Parkinson’s)"
+                prediction = "🟢 Negative (No Parkinson's)"
             elif prob > 0.55:
-                prediction = "Positive (Parkinson’s)"
+                prediction = "🔴 Positive (Parkinson's)"
             else:
-                prediction = "Uncertain, further evaluation needed"
+                prediction = "🟡 Uncertain — further evaluation needed"
 
-            st.subheader("Prediction")
-            st.write(prediction)
-            st.write(f"Probability: {prob:.3f}")
-            st.write("Encoded UPDRS:", updrs_encoded)
+            # ── Results ───────────────────────────────────────
+            st.markdown("---")
+            st.subheader("📊 Prediction Result")
+
+            col1, col2 = st.columns(2)
+            col1.metric("Prediction",    prediction)
+            col2.metric("Hand Tested",   f"{hand} Hand")
+
+            st.markdown("**Confidence:**")
+            st.progress(float(prob), text=f"{prob:.1%} probability of Parkinson's")
+
+            st.markdown("---")
+            st.caption(f"UPDRS score {updrs_raw} encoded as {updrs_encoded}")
